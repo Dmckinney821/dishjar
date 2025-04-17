@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "Pantry Manager",
-    "slug": "pantry-manager",
+    "name": "Dishjar",
+    "slug": "dishjar",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -16,13 +16,14 @@
     ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.anonymous.TodoAppNew"
+      "bundleIdentifier": "com.anonymous.Dishjar"
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
-      }
+      },
+      "package": "com.anonymous.dishjar"
     },
     "web": {
       "favicon": "./assets/favicon.png"
