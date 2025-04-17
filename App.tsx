@@ -1,14 +1,15 @@
 import { NavigationContainer } from '@react-navigation/native';
 import { createDrawerNavigator } from '@react-navigation/drawer';
 import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, View, Text, TouchableOpacity, FlatList, TextInput, Alert, Modal, ScrollView, ActivityIndicator, KeyboardAvoidingView, Platform } from 'react-native';
-import { useState, useEffect } from 'react';
+import { StyleSheet, View, Text, TouchableOpacity, FlatList, TextInput, Alert, Modal, ScrollView, ActivityIndicator, KeyboardAvoidingView, Platform, Image } from 'react-native';
+import { useState, useEffect, createContext, useContext } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Picker } from '@react-native-picker/picker';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import Slider from '@react-native-community/slider';
 
 const Drawer = createDrawerNavigator();
 
@@ -30,6 +31,27 @@ const COMMON_INGREDIENTS = [
   'oil', 'vinegar', 'honey', 'yogurt', 'cream', 'sauce', 'spices', 'herbs'
 ];
 
+const CUISINE_TYPES = [
+  'American',
+  'Chinese',
+  'Mexican',
+  'Italian',
+  'Indian',
+  'Greek',
+  'Japanese',
+  'Thai',
+  'Mediterranean',
+  'Other'
+];
+
+const MEAL_TYPES = [
+  'Breakfast',
+  'Lunch',
+  'Dinner',
+  'Snack',
+  'Dessert'
+];
+
 interface Ingredient {
   id: string;
   name: string;
@@ -44,6 +66,12 @@ interface Recipe {
   name: string;
   ingredients: string[];
   instructions: string;
+  cuisine: string;
+  mealType: string;
+  prepTime: number; // in minutes
+  cookTime: number; // in minutes
+  difficulty: 'Easy' | 'Medium' | 'Hard';
+  servings: number;
 }
 
 interface OnlineRecipe {
@@ -58,20 +86,29 @@ interface OnlineRecipe {
   ingredients: string[];
 }
 
-function AddIngredientScreen() {
-  const [ingredients, setIngredients] = useState<Ingredient[]>([]);
-  const [newIngredient, setNewIngredient] = useState('');
-  const [quantity, setQuantity] = useState('');
-  const [unit, setUnit] = useState('');
-  const [category, setCategory] = useState('');
-  const [expirationDate, setExpirationDate] = useState<Date | null>(null);
-  const [showDatePicker, setShowDatePicker] = useState(false);
-  const [suggestions, setSuggestions] = useState<string[]>([]);
-  const [showSuggestions, setShowSuggestions] = useState(false);
+interface ShoppingListItem {
+  id: string;
+  name: string;
+  quantity: string;
+  unit: string;
+  category: string;
+  isChecked: boolean;
+}
 
-  useEffect(() => {
-    loadIngredients();
-  }, []);
+// Create a context for ingredients
+const IngredientsContext = createContext<{
+  ingredients: Ingredient[];
+  setIngredients: (ingredients: Ingredient[]) => void;
+  loadIngredients: () => Promise<void>;
+}>({
+  ingredients: [],
+  setIngredients: () => {},
+  loadIngredients: async () => {},
+});
+
+// Create a provider component
+function IngredientsProvider({ children }: { children: React.ReactNode }) {
+  const [ingredients, setIngredients] = useState<Ingredient[]>([]);
 
   const loadIngredients = async () => {
     try {
@@ -87,6 +124,28 @@ function AddIngredientScreen() {
       Alert.alert('Error', 'Failed to load ingredients');
     }
   };
+
+  useEffect(() => {
+    loadIngredients();
+  }, []);
+
+  return (
+    <IngredientsContext.Provider value={{ ingredients, setIngredients, loadIngredients }}>
+      {children}
+    </IngredientsContext.Provider>
+  );
+}
+
+function AddIngredientScreen() {
+  const { ingredients, setIngredients, loadIngredients } = useContext(IngredientsContext);
+  const [newIngredient, setNewIngredient] = useState('');
+  const [quantity, setQuantity] = useState('');
+  const [unit, setUnit] = useState('');
+  const [category, setCategory] = useState('');
+  const [expirationDate, setExpirationDate] = useState<Date | null>(null);
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
 
   const checkSpelling = (text: string) => {
     if (text.length < 2) {
@@ -288,10 +347,9 @@ function AddIngredientScreen() {
   );
 }
 
-function ViewIngredientsScreen() {
-  const [ingredients, setIngredients] = useState<Ingredient[]>([]);
+function ViewIngredientsScreen({ navigation }: { navigation: any }) {
+  const { ingredients, setIngredients, loadIngredients } = useContext(IngredientsContext);
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [editingIngredient, setEditingIngredient] = useState<Ingredient | null>(null);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDatePicker, setShowDatePicker] = useState(false);
@@ -302,25 +360,64 @@ function ViewIngredientsScreen() {
   const [editExpirationDate, setEditExpirationDate] = useState<Date | null>(null);
   const [showEditDatePicker, setShowEditDatePicker] = useState(false);
   const [editName, setEditName] = useState('');
+  const [availableRecipes, setAvailableRecipes] = useState<Recipe[]>([]);
 
-  useEffect(() => {
-    loadIngredients();
-  }, []);
-
-  const loadIngredients = async () => {
-    try {
-      const storedIngredients = await AsyncStorage.getItem('ingredients');
-      if (storedIngredients) {
-        const parsedIngredients = JSON.parse(storedIngredients).map((ing: Ingredient) => ({
-          ...ing,
-          expirationDate: ing.expirationDate ? new Date(ing.expirationDate) : null
-        }));
-        setIngredients(parsedIngredients);
-      }
-    } catch (error) {
-      Alert.alert('Error', 'Failed to load ingredients');
+  const localRecipes: Recipe[] = [
+    {
+      id: '1',
+      name: 'Cheesy Pasta',
+      ingredients: ['pasta', 'butter', 'parmesan', 'garlic', 'salt', 'pepper'],
+      instructions: '1. Cook pasta according to package instructions\n2. Melt butter in a pan\n3. Add minced garlic and cook until fragrant\n4. Add cooked pasta and toss\n5. Add parmesan, salt, and pepper\n6. Stir until cheese is melted',
+      cuisine: 'Italian',
+      mealType: 'Dinner',
+      prepTime: 10,
+      cookTime: 15,
+      difficulty: 'Easy',
+      servings: 4
+    },
+    {
+      id: '2',
+      name: 'Garlic Butter Shrimp',
+      ingredients: ['shrimp', 'butter', 'garlic', 'lemon', 'parsley', 'salt', 'pepper'],
+      instructions: '1. Melt butter in a pan\n2. Add minced garlic and cook until fragrant\n3. Add shrimp and cook until pink\n4. Add lemon juice, parsley, salt, and pepper\n5. Serve hot',
+      cuisine: 'Mediterranean',
+      mealType: 'Dinner',
+      prepTime: 15,
+      cookTime: 10,
+      difficulty: 'Easy',
+      servings: 2
+    },
+    {
+      id: '3',
+      name: 'Simple Salad',
+      ingredients: ['lettuce', 'tomato', 'cucumber', 'olive oil', 'vinegar', 'salt', 'pepper'],
+      instructions: '1. Chop vegetables\n2. Mix olive oil, vinegar, salt, and pepper\n3. Toss vegetables with dressing\n4. Serve chilled',
+      cuisine: 'Mediterranean',
+      mealType: 'Lunch',
+      prepTime: 10,
+      cookTime: 0,
+      difficulty: 'Easy',
+      servings: 2
     }
-  };
+  ];
+
+  // Add useEffect to check for available recipes whenever ingredients change
+  useEffect(() => {
+    const checkAvailableRecipes = () => {
+      const availableIngredients = ingredients.map(ing => ing.name.toLowerCase());
+      const matchingRecipes = localRecipes.filter((recipe: Recipe) => 
+        recipe.ingredients.every((ingredient: string) => 
+          availableIngredients.some(available => 
+            available.includes(ingredient.toLowerCase()) || 
+            ingredient.toLowerCase().includes(available)
+          )
+        )
+      );
+      setAvailableRecipes(matchingRecipes);
+    };
+
+    checkAvailableRecipes();
+  }, [ingredients]);
 
   const deleteIngredient = async (id: string) => {
     const updatedIngredients = ingredients.filter(ingredient => ingredient.id !== id);
@@ -419,10 +516,39 @@ function ViewIngredientsScreen() {
     }
   };
 
+  const findMatchingRecipes = () => {
+    const availableIngredients = ingredients.map(ing => ing.name.toLowerCase());
+    
+    // Find recipes that can be made with available ingredients
+    const matchingRecipes = localRecipes.filter((recipe: Recipe) => {
+      return recipe.ingredients.every((ingredient: string) => 
+        availableIngredients.some(available => 
+          available.includes(ingredient.toLowerCase()) || 
+          ingredient.toLowerCase().includes(available)
+        )
+      );
+    });
+
+    if (matchingRecipes.length === 0) {
+      Alert.alert(
+        'No Recipes Found',
+        'No recipes can be made with your current ingredients. Try adding more ingredients to your pantry.',
+        [{ text: 'OK' }]
+      );
+    } else {
+      // Navigate to the first matching recipe
+      navigation.navigate('Recipes', {
+        screen: 'RecipeScreen',
+        params: { 
+          initialRecipe: matchingRecipes[0],
+          matchingRecipes: matchingRecipes 
+        }
+      });
+    }
+  };
+
   const filteredIngredients = ingredients.filter(ingredient => {
-    const matchesSearch = ingredient.name.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesCategory = selectedCategory === 'All' || ingredient.category === selectedCategory;
-    return matchesSearch && matchesCategory;
+    return ingredient.name.toLowerCase().includes(searchQuery.toLowerCase());
   });
 
   const renderIngredient = ({ item }: { item: Ingredient }) => (
@@ -438,7 +564,6 @@ function ViewIngredientsScreen() {
         <Text style={styles.ingredientDetails}>
           {item.quantity} {item.unit}
         </Text>
-        <Text style={styles.ingredientCategory}>{item.category}</Text>
         {item.expirationDate && (
           <Text style={styles.expirationDate}>
             Expires: {item.expirationDate.toLocaleDateString()}
@@ -476,38 +601,30 @@ function ViewIngredientsScreen() {
           value={searchQuery}
           onChangeText={setSearchQuery}
         />
-        <View style={styles.categoryContainer}>
-          <Text style={styles.categoryLabel}>Category:</Text>
-          <View style={styles.categoryButtons}>
-            <TouchableOpacity
-              style={[
-                styles.categoryButton,
-                selectedCategory === 'All' && styles.selectedCategoryButton
-              ]}
-              onPress={() => setSelectedCategory('All')}
-            >
-              <Text style={[
-                styles.categoryButtonText,
-                selectedCategory === 'All' && styles.selectedCategoryButtonText
-              ]}>All</Text>
-            </TouchableOpacity>
-            {CATEGORIES.map((cat) => (
-              <TouchableOpacity
-                key={cat}
-                style={[
-                  styles.categoryButton,
-                  selectedCategory === cat && styles.selectedCategoryButton
-                ]}
-                onPress={() => setSelectedCategory(cat)}
-              >
-                <Text style={[
-                  styles.categoryButtonText,
-                  selectedCategory === cat && styles.selectedCategoryButtonText
-                ]}>{cat}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        </View>
+        <TouchableOpacity
+          style={[
+            styles.suggestRecipeButton,
+            availableRecipes.length > 0 && styles.suggestRecipeButtonActive
+          ]}
+          onPress={findMatchingRecipes}
+        >
+          <MaterialCommunityIcons 
+            name={availableRecipes.length > 0 ? "food" : "food-outline"} 
+            size={24} 
+            color={availableRecipes.length > 0 ? "#fff" : "#666"} 
+          />
+          <Text style={[
+            styles.suggestRecipeButtonText,
+            availableRecipes.length > 0 && styles.suggestRecipeButtonTextActive
+          ]}>
+            Suggest Recipe {availableRecipes.length > 0 && `(${availableRecipes.length} available)`}
+          </Text>
+          {availableRecipes.length > 0 && (
+            <View style={styles.recipeIndicator}>
+              <MaterialCommunityIcons name="exclamation" size={16} color="#fff" />
+            </View>
+          )}
+        </TouchableOpacity>
         {selectedForCombine.length >= 2 && (
           <TouchableOpacity
             style={styles.combineSelectedButton}
@@ -619,67 +736,99 @@ function ViewIngredientsScreen() {
 }
 
 function RecipeScreen() {
-  const [ingredients, setIngredients] = useState<Ingredient[]>([]);
+  const { ingredients } = useContext(IngredientsContext);
   const [searchQuery, setSearchQuery] = useState('');
-  const [recipes, setRecipes] = useState<Recipe[]>([
+  const [selectedCuisine, setSelectedCuisine] = useState<string>('');
+  const [selectedMealType, setSelectedMealType] = useState<string>('');
+  const [availableRecipes, setAvailableRecipes] = useState<Recipe[]>([]);
+
+  const localRecipes: Recipe[] = [
     {
       id: '1',
       name: 'Cheesy Pasta',
       ingredients: ['pasta', 'butter', 'parmesan', 'garlic', 'salt', 'pepper'],
-      instructions: '1. Cook pasta according to package instructions\n2. Melt butter in a pan\n3. Add minced garlic and cook until fragrant\n4. Add cooked pasta and toss\n5. Add parmesan, salt, and pepper\n6. Stir until cheese is melted'
+      instructions: '1. Cook pasta according to package instructions\n2. Melt butter in a pan\n3. Add minced garlic and cook until fragrant\n4. Add cooked pasta and toss\n5. Add parmesan, salt, and pepper\n6. Stir until cheese is melted',
+      cuisine: 'Italian',
+      mealType: 'Dinner',
+      prepTime: 10,
+      cookTime: 15,
+      difficulty: 'Easy',
+      servings: 4
     },
-  ]);
-  const [availableIngredients, setAvailableIngredients] = useState<string[]>([]);
+    {
+      id: '2',
+      name: 'Garlic Butter Shrimp',
+      ingredients: ['shrimp', 'butter', 'garlic', 'lemon', 'parsley', 'salt', 'pepper'],
+      instructions: '1. Melt butter in a pan\n2. Add minced garlic and cook until fragrant\n3. Add shrimp and cook until pink\n4. Add lemon juice, parsley, salt, and pepper\n5. Serve hot',
+      cuisine: 'Mediterranean',
+      mealType: 'Dinner',
+      prepTime: 15,
+      cookTime: 10,
+      difficulty: 'Easy',
+      servings: 2
+    },
+    {
+      id: '3',
+      name: 'Simple Salad',
+      ingredients: ['lettuce', 'tomato', 'cucumber', 'olive oil', 'vinegar', 'salt', 'pepper'],
+      instructions: '1. Chop vegetables\n2. Mix olive oil, vinegar, salt, and pepper\n3. Toss vegetables with dressing\n4. Serve chilled',
+      cuisine: 'Mediterranean',
+      mealType: 'Lunch',
+      prepTime: 10,
+      cookTime: 0,
+      difficulty: 'Easy',
+      servings: 2
+    }
+  ];
 
   useEffect(() => {
-    loadIngredients();
-  }, []);
+    const checkAvailableRecipes = () => {
+      const availableIngredients = ingredients.map(ing => ing.name.toLowerCase());
+      const matchingRecipes = localRecipes.filter((recipe: Recipe) => 
+        recipe.ingredients.every((ingredient: string) => 
+          availableIngredients.some(available => 
+            available.includes(ingredient.toLowerCase()) || 
+            ingredient.toLowerCase().includes(available)
+          )
+        )
+      );
+      setAvailableRecipes(matchingRecipes);
+    };
 
-  const loadIngredients = async () => {
-    try {
-      const storedIngredients = await AsyncStorage.getItem('ingredients');
-      if (storedIngredients) {
-        const parsedIngredients = JSON.parse(storedIngredients).map((ing: Ingredient) => ({
-          ...ing,
-          expirationDate: ing.expirationDate ? new Date(ing.expirationDate) : null
-        }));
-        setIngredients(parsedIngredients);
-        setAvailableIngredients(parsedIngredients.map((ing: Ingredient) => ing.name.toLowerCase()));
-      }
-    } catch (error) {
-      Alert.alert('Error', 'Failed to load ingredients');
-    }
-  };
+    checkAvailableRecipes();
+  }, [ingredients]);
 
-  const canMakeRecipe = (recipe: Recipe) => {
-    return recipe.ingredients.every(ingredient => 
-      availableIngredients.some(available => 
-        available.includes(ingredient.toLowerCase()) || ingredient.toLowerCase().includes(available)
-      )
-    );
-  };
-
-  const filteredRecipes = recipes.filter(recipe => {
+  const filteredRecipes = availableRecipes.filter(recipe => {
     const matchesSearch = recipe.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       recipe.ingredients.some(ingredient => ingredient.toLowerCase().includes(searchQuery.toLowerCase()));
-    return searchQuery ? matchesSearch : true;
+    const matchesCuisine = !selectedCuisine || recipe.cuisine === selectedCuisine;
+    const matchesMealType = !selectedMealType || recipe.mealType === selectedMealType;
+    return matchesSearch && matchesCuisine && matchesMealType;
   });
 
   const renderRecipe = ({ item }: { item: Recipe }) => {
-    const canMake = canMakeRecipe(item);
+    const canMake = true; // Since we're already filtering available recipes
     return (
       <View style={[styles.recipeItem, !canMake && styles.recipeItemUnavailable]}>
         <View style={styles.recipeHeader}>
           <Text style={styles.recipeName}>{item.name}</Text>
-          {canMake ? (
-            <View style={styles.canMakeTag}>
-              <Text style={styles.canMakeText}>Can Make!</Text>
+          <View style={styles.recipeTags}>
+            <View style={styles.recipeTag}>
+              <MaterialCommunityIcons name="clock-outline" size={14} color="#666" />
+              <Text style={styles.recipeTagText}>{item.prepTime + item.cookTime} min</Text>
             </View>
-          ) : (
-            <View style={styles.cannotMakeTag}>
-              <Text style={styles.cannotMakeText}>Missing Ingredients</Text>
+            <View style={styles.recipeTag}>
+              <MaterialCommunityIcons name="silverware-fork-knife" size={14} color="#666" />
+              <Text style={styles.recipeTagText}>{item.servings} servings</Text>
             </View>
-          )}
+            <View style={styles.recipeTag}>
+              <MaterialCommunityIcons name="chef-hat" size={14} color="#666" />
+              <Text style={styles.recipeTagText}>{item.difficulty}</Text>
+            </View>
+          </View>
+        </View>
+        <View style={styles.recipeInfo}>
+          <Text style={styles.recipeCuisine}>{item.cuisine} • {item.mealType}</Text>
         </View>
         <Text style={styles.recipeSubtitle}>Ingredients:</Text>
         <View style={styles.ingredientTags}>
@@ -688,8 +837,9 @@ function RecipeScreen() {
               key={index} 
               style={[
                 styles.ingredientTag,
-                availableIngredients.some(available => 
-                  available.includes(ingredient.toLowerCase()) || ingredient.toLowerCase().includes(available)
+                ingredients.some(ing => 
+                  ing.name.toLowerCase().includes(ingredient.toLowerCase()) || 
+                  ingredient.toLowerCase().includes(ing.name.toLowerCase())
                 ) ? styles.availableIngredient : styles.missingIngredient
               ]}
             >
@@ -712,6 +862,49 @@ function RecipeScreen() {
           value={searchQuery}
           onChangeText={setSearchQuery}
         />
+        <View style={styles.filterContainer}>
+          <Text style={styles.filterLabel}>Cuisine:</Text>
+          <View style={styles.filterOptions}>
+            {CUISINE_TYPES.map((cuisine) => (
+              <TouchableOpacity
+                key={cuisine}
+                style={[
+                  styles.filterOption,
+                  selectedCuisine === cuisine && styles.selectedFilterOption
+                ]}
+                onPress={() => setSelectedCuisine(selectedCuisine === cuisine ? '' : cuisine)}
+              >
+                <Text style={[
+                  styles.filterOptionText,
+                  selectedCuisine === cuisine && styles.selectedFilterOptionText
+                ]}>
+                  {cuisine}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          <Text style={styles.filterLabel}>Meal Type:</Text>
+          <View style={styles.filterOptions}>
+            {MEAL_TYPES.map((mealType) => (
+              <TouchableOpacity
+                key={mealType}
+                style={[
+                  styles.filterOption,
+                  selectedMealType === mealType && styles.selectedFilterOption
+                ]}
+                onPress={() => setSelectedMealType(selectedMealType === mealType ? '' : mealType)}
+              >
+                <Text style={[
+                  styles.filterOptionText,
+                  selectedMealType === mealType && styles.selectedFilterOptionText
+                ]}>
+                  {mealType}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
       </View>
       <FlatList
         data={filteredRecipes}
@@ -852,72 +1045,619 @@ function OnlineRecipesScreen() {
   );
 }
 
+function ShoppingListScreen() {
+  const { ingredients } = useContext(IngredientsContext);
+  const [shoppingList, setShoppingList] = useState<ShoppingListItem[]>([]);
+  const [newItem, setNewItem] = useState('');
+  const [quantity, setQuantity] = useState('');
+  const [unit, setUnit] = useState('');
+  const [category, setCategory] = useState('');
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+
+  useEffect(() => {
+    loadShoppingList();
+  }, []);
+
+  const loadShoppingList = async () => {
+    try {
+      const storedList = await AsyncStorage.getItem('shoppingList');
+      if (storedList) {
+        setShoppingList(JSON.parse(storedList));
+      }
+    } catch (error) {
+      Alert.alert('Error', 'Failed to load shopping list');
+    }
+  };
+
+  const saveShoppingList = async (list: ShoppingListItem[]) => {
+    try {
+      await AsyncStorage.setItem('shoppingList', JSON.stringify(list));
+    } catch (error) {
+      Alert.alert('Error', 'Failed to save shopping list');
+    }
+  };
+
+  const addItem = async () => {
+    if (!newItem.trim()) {
+      Alert.alert('Error', 'Please enter an item name');
+      return;
+    }
+
+    const newShoppingItem: ShoppingListItem = {
+      id: Date.now().toString(),
+      name: newItem.trim(),
+      quantity: quantity.trim() || '1',
+      unit: unit.trim() || 'units',
+      category: category || 'Other',
+      isChecked: false,
+    };
+
+    const updatedList = [...shoppingList, newShoppingItem];
+    setShoppingList(updatedList);
+    await saveShoppingList(updatedList);
+    setNewItem('');
+    setQuantity('');
+    setUnit('');
+    setCategory('');
+  };
+
+  const toggleItem = async (id: string) => {
+    const updatedList = shoppingList.map(item =>
+      item.id === id ? { ...item, isChecked: !item.isChecked } : item
+    );
+    setShoppingList(updatedList);
+    await saveShoppingList(updatedList);
+  };
+
+  const deleteItem = async (id: string) => {
+    const updatedList = shoppingList.filter(item => item.id !== id);
+    setShoppingList(updatedList);
+    await saveShoppingList(updatedList);
+  };
+
+  const checkSpelling = (text: string) => {
+    if (text.length < 2) {
+      setSuggestions([]);
+      setShowSuggestions(false);
+      return;
+    }
+
+    const matches = COMMON_INGREDIENTS.filter(ingredient => 
+      ingredient.includes(text.toLowerCase()) || text.toLowerCase().includes(ingredient)
+    );
+    setSuggestions(matches);
+    setShowSuggestions(matches.length > 0);
+  };
+
+  const moveToPantry = async (item: ShoppingListItem) => {
+    const newIngredient: Ingredient = {
+      id: Date.now().toString(),
+      name: item.name,
+      quantity: item.quantity,
+      unit: item.unit,
+      category: item.category,
+      expirationDate: null,
+    };
+
+    const { ingredients: currentIngredients, setIngredients } = useContext(IngredientsContext);
+    const updatedIngredients = [...currentIngredients, newIngredient];
+    setIngredients(updatedIngredients);
+    
+    try {
+      await AsyncStorage.setItem('ingredients', JSON.stringify(updatedIngredients));
+      await deleteItem(item.id);
+      Alert.alert('Success', 'Item moved to pantry');
+    } catch (error) {
+      Alert.alert('Error', 'Failed to move item to pantry');
+    }
+  };
+
+  return (
+    <View style={styles.container}>
+      <View style={styles.inputContainer}>
+        <TextInput
+          style={styles.ingredientInput}
+          placeholder="Add new item..."
+          value={newItem}
+          onChangeText={(text) => {
+            setNewItem(text);
+            checkSpelling(text);
+          }}
+        />
+        {showSuggestions && suggestions.length > 0 && (
+          <View style={styles.suggestionsContainer}>
+            {suggestions.map((suggestion, index) => (
+              <TouchableOpacity
+                key={index}
+                style={styles.suggestionItem}
+                onPress={() => {
+                  setNewItem(suggestion);
+                  setShowSuggestions(false);
+                }}
+              >
+                <Text style={styles.suggestionText}>{suggestion}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
+        <View style={styles.quantityContainer}>
+          <TextInput
+            style={styles.quantityInput}
+            placeholder="Quantity"
+            value={quantity}
+            onChangeText={setQuantity}
+            keyboardType="numeric"
+          />
+          <TextInput
+            style={styles.unitInput}
+            placeholder="Unit"
+            value={unit}
+            onChangeText={setUnit}
+          />
+        </View>
+        <View style={styles.pickerContainer}>
+          <Picker
+            selectedValue={category}
+            style={styles.picker}
+            onValueChange={(itemValue) => setCategory(itemValue as string)}
+            dropdownIconColor="#666"
+          >
+            <Picker.Item label="Select Category" value="" />
+            {CATEGORIES.map((cat) => (
+              <Picker.Item key={cat} label={cat} value={cat} />
+            ))}
+          </Picker>
+        </View>
+        <TouchableOpacity style={styles.addButton} onPress={addItem}>
+          <Text style={styles.addButtonText}>Add to Shopping List</Text>
+        </TouchableOpacity>
+      </View>
+
+      <FlatList
+        data={shoppingList}
+        renderItem={({ item }) => (
+          <View style={styles.shoppingItem}>
+            <TouchableOpacity
+              style={styles.checkbox}
+              onPress={() => toggleItem(item.id)}
+            >
+              <MaterialCommunityIcons
+                name={item.isChecked ? "checkbox-marked" : "checkbox-blank-outline"}
+                size={24}
+                color={item.isChecked ? "#4CAF50" : "#666"}
+              />
+            </TouchableOpacity>
+            <View style={styles.shoppingItemDetails}>
+              <Text style={[
+                styles.shoppingItemName,
+                item.isChecked && styles.checkedItem
+              ]}>
+                {item.name}
+              </Text>
+              <Text style={styles.shoppingItemQuantity}>
+                {item.quantity} {item.unit}
+              </Text>
+              <Text style={styles.shoppingItemCategory}>
+                {item.category}
+              </Text>
+            </View>
+            <View style={styles.shoppingItemActions}>
+              <TouchableOpacity
+                style={styles.moveToPantryButton}
+                onPress={() => moveToPantry(item)}
+              >
+                <MaterialCommunityIcons name="fridge" size={24} color="#4CAF50" />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.deleteButton}
+                onPress={() => deleteItem(item.id)}
+              >
+                <MaterialCommunityIcons name="delete" size={24} color="#FF3B30" />
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+        keyExtractor={item => item.id}
+        style={styles.list}
+        contentContainerStyle={styles.listContent}
+      />
+    </View>
+  );
+}
+
+function WhatsForDinnerScreen() {
+  const { ingredients } = useContext(IngredientsContext);
+  const [selectedCuisine, setSelectedCuisine] = useState<string>('');
+  const [selectedMealType, setSelectedMealType] = useState<string>('');
+  const [suggestedRecipes, setSuggestedRecipes] = useState<Recipe[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [shoppingList, setShoppingList] = useState<ShoppingListItem[]>([]);
+  const [localRecipes] = useState<Recipe[]>([
+    {
+      id: '1',
+      name: 'Spaghetti Carbonara',
+      ingredients: ['spaghetti', 'eggs', 'bacon', 'parmesan cheese', 'black pepper'],
+      instructions: '1. Cook spaghetti\n2. Fry bacon\n3. Mix eggs and cheese\n4. Combine all ingredients',
+      cuisine: 'Italian',
+      mealType: 'Dinner',
+      prepTime: 10,
+      cookTime: 20,
+      difficulty: 'Medium',
+      servings: 4
+    },
+    {
+      id: '2',
+      name: 'Chicken Stir Fry',
+      ingredients: ['chicken breast', 'bell peppers', 'soy sauce', 'garlic', 'ginger', 'rice'],
+      instructions: '1. Cook rice\n2. Stir fry chicken\n3. Add vegetables\n4. Add sauce',
+      cuisine: 'Asian',
+      mealType: 'Dinner',
+      prepTime: 15,
+      cookTime: 15,
+      difficulty: 'Easy',
+      servings: 4
+    },
+    {
+      id: '3',
+      name: 'Greek Salad',
+      ingredients: ['cucumber', 'tomatoes', 'red onion', 'feta cheese', 'olives', 'olive oil'],
+      instructions: '1. Chop vegetables\n2. Add feta and olives\n3. Dress with olive oil',
+      cuisine: 'Mediterranean',
+      mealType: 'Lunch',
+      prepTime: 15,
+      cookTime: 0,
+      difficulty: 'Easy',
+      servings: 2
+    }
+  ]);
+
+  useEffect(() => {
+    loadShoppingList();
+  }, []);
+
+  const loadShoppingList = async () => {
+    try {
+      const storedList = await AsyncStorage.getItem('shoppingList');
+      if (storedList) {
+        setShoppingList(JSON.parse(storedList));
+      }
+    } catch (error) {
+      console.error('Error loading shopping list:', error);
+    }
+  };
+
+  const addToShoppingList = async (missingIngredients: string[]) => {
+    const newItems = missingIngredients.map(ingredient => ({
+      id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
+      name: ingredient,
+      quantity: '1',
+      unit: 'units',
+      category: 'Other',
+      isChecked: false,
+    }));
+
+    const updatedList = [...shoppingList, ...newItems];
+    setShoppingList(updatedList);
+    
+    try {
+      await AsyncStorage.setItem('shoppingList', JSON.stringify(updatedList));
+      Alert.alert('Success', 'Ingredients added to shopping list!');
+    } catch (error) {
+      console.error('Error saving shopping list:', error);
+      Alert.alert('Error', 'Failed to add ingredients to shopping list');
+    }
+  };
+
+  const getMissingIngredients = (recipe: Recipe) => {
+    const availableIngredients = ingredients.map(ing => ing.name.toLowerCase());
+    return recipe.ingredients.filter(ingredient => 
+      !availableIngredients.some(available => 
+        available.includes(ingredient.toLowerCase()) || 
+        ingredient.toLowerCase().includes(available)
+      )
+    );
+  };
+
+  const getSuggestions = () => {
+    setLoading(true);
+    const availableIngredients = ingredients.map(ing => ing.name.toLowerCase());
+    
+    // Filter recipes based on available ingredients and preferences
+    const matchingRecipes = localRecipes.filter((recipe: Recipe) => {
+      // Check if recipe matches selected filters
+      const matchesCuisine = !selectedCuisine || recipe.cuisine === selectedCuisine;
+      const matchesMealType = !selectedMealType || recipe.mealType === selectedMealType;
+      
+      // Check if we have enough ingredients
+      const hasEnoughIngredients = recipe.ingredients.every((ingredient: string) => 
+        availableIngredients.some(available => 
+          available.includes(ingredient.toLowerCase()) || 
+          ingredient.toLowerCase().includes(available)
+        )
+      );
+
+      return matchesCuisine && matchesMealType && hasEnoughIngredients;
+    });
+
+    // Sort recipes by:
+    // 1. Number of matching ingredients (more is better)
+    // 2. Total cooking time (shorter is better)
+    const sortedRecipes = matchingRecipes.sort((a: Recipe, b: Recipe) => {
+      const aMatches = a.ingredients.filter((ing: string) => 
+        availableIngredients.some(avail => 
+          avail.includes(ing.toLowerCase()) || ing.toLowerCase().includes(avail)
+        )
+      ).length;
+      
+      const bMatches = b.ingredients.filter((ing: string) => 
+        availableIngredients.some(avail => 
+          avail.includes(ing.toLowerCase()) || ing.toLowerCase().includes(avail)
+        )
+      ).length;
+
+      if (aMatches !== bMatches) {
+        return bMatches - aMatches; // More matches first
+      }
+      
+      return (a.prepTime + a.cookTime) - (b.prepTime + b.cookTime); // Shorter time first
+    });
+
+    setSuggestedRecipes(sortedRecipes);
+    setLoading(false);
+  };
+
+  return (
+    <View style={styles.container}>
+      <View style={styles.headerContainer}>
+        <Text style={styles.title}>What's for Dinner?</Text>
+        <Text style={styles.subtitle}>Find recipes based on your pantry</Text>
+      </View>
+      
+      <View style={styles.filterContainer}>
+        <Text style={styles.filterLabel}>Cuisine:</Text>
+        <ScrollView 
+          horizontal 
+          showsHorizontalScrollIndicator={false}
+          style={styles.filterScrollView}
+        >
+          <View style={styles.filterOptions}>
+            {CUISINE_TYPES.map((cuisine) => (
+              <TouchableOpacity
+                key={cuisine}
+                style={[
+                  styles.filterOption,
+                  selectedCuisine === cuisine && styles.selectedFilterOption
+                ]}
+                onPress={() => setSelectedCuisine(selectedCuisine === cuisine ? '' : cuisine)}
+              >
+                <Text style={[
+                  styles.filterOptionText,
+                  selectedCuisine === cuisine && styles.selectedFilterOptionText
+                ]}>
+                  {cuisine}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </ScrollView>
+
+        <Text style={styles.filterLabel}>Meal Type:</Text>
+        <ScrollView 
+          horizontal 
+          showsHorizontalScrollIndicator={false}
+          style={styles.filterScrollView}
+        >
+          <View style={styles.filterOptions}>
+            {MEAL_TYPES.map((mealType) => (
+              <TouchableOpacity
+                key={mealType}
+                style={[
+                  styles.filterOption,
+                  selectedMealType === mealType && styles.selectedFilterOption
+                ]}
+                onPress={() => setSelectedMealType(selectedMealType === mealType ? '' : mealType)}
+              >
+                <Text style={[
+                  styles.filterOptionText,
+                  selectedMealType === mealType && styles.selectedFilterOptionText
+                ]}>
+                  {mealType}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </ScrollView>
+      </View>
+
+      {loading ? (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#3498db" />
+          <Text style={styles.loadingText}>Finding perfect recipes...</Text>
+        </View>
+      ) : (
+        <ScrollView style={styles.recipesContainer}>
+          {suggestedRecipes.map((recipe) => {
+            const missingIngredients = getMissingIngredients(recipe);
+            return (
+              <View key={recipe.id} style={styles.recipeCard}>
+                <View style={styles.recipeHeader}>
+                  <Text style={styles.recipeName}>{recipe.name}</Text>
+                  <View style={styles.recipeMeta}>
+                    <View style={styles.recipeMetaItem}>
+                      <MaterialCommunityIcons name="clock-outline" size={16} color="#666" />
+                      <Text style={styles.recipeMetaText}>{recipe.prepTime + recipe.cookTime} min</Text>
+                    </View>
+                    <View style={styles.recipeMetaItem}>
+                      <MaterialCommunityIcons name="silverware-fork-knife" size={16} color="#666" />
+                      <Text style={styles.recipeMetaText}>{recipe.servings} servings</Text>
+                    </View>
+                  </View>
+                </View>
+
+                <View style={styles.recipeTags}>
+                  <View style={styles.recipeTag}>
+                    <Text style={styles.recipeTagText}>{recipe.cuisine}</Text>
+                  </View>
+                  <View style={styles.recipeTag}>
+                    <Text style={styles.recipeTagText}>{recipe.mealType}</Text>
+                  </View>
+                  <View style={styles.recipeTag}>
+                    <Text style={styles.recipeTagText}>{recipe.difficulty}</Text>
+                  </View>
+                </View>
+
+                <Text style={styles.recipeIngredientsTitle}>Ingredients:</Text>
+                <View style={styles.ingredientTags}>
+                  {recipe.ingredients.map((ingredient, index) => {
+                    const isAvailable = ingredients.some(ing => 
+                      ing.name.toLowerCase().includes(ingredient.toLowerCase()) || 
+                      ingredient.toLowerCase().includes(ing.name.toLowerCase())
+                    );
+                    return (
+                      <View 
+                        key={index} 
+                        style={[
+                          styles.ingredientTag,
+                          isAvailable ? styles.availableIngredient : styles.missingIngredient
+                        ]}
+                      >
+                        <MaterialCommunityIcons 
+                          name={isAvailable ? "check-circle" : "alert-circle"} 
+                          size={16} 
+                          color={isAvailable ? "#4CAF50" : "#F44336"} 
+                        />
+                        <Text style={styles.ingredientText}>{ingredient}</Text>
+                      </View>
+                    );
+                  })}
+                </View>
+
+                {missingIngredients.length > 0 && (
+                  <View style={styles.missingIngredientsContainer}>
+                    <View style={styles.missingIngredientsHeader}>
+                      <MaterialCommunityIcons name="cart-plus" size={20} color="#E65100" />
+                      <Text style={styles.missingIngredientsTitle}>Missing Ingredients</Text>
+                    </View>
+                    <View style={styles.missingIngredientsList}>
+                      {missingIngredients.map((ingredient, index) => (
+                        <View key={index} style={styles.missingIngredientItem}>
+                          <MaterialCommunityIcons name="circle-small" size={16} color="#E65100" />
+                          <Text style={styles.missingIngredientText}>{ingredient}</Text>
+                        </View>
+                      ))}
+                    </View>
+                    <TouchableOpacity
+                      style={styles.addToShoppingListButton}
+                      onPress={() => addToShoppingList(missingIngredients)}
+                    >
+                      <MaterialCommunityIcons name="cart-plus" size={20} color="#fff" />
+                      <Text style={styles.addToShoppingListButtonText}>
+                        Add to Shopping List
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+
+                <Text style={styles.recipeInstructionsTitle}>Instructions:</Text>
+                <Text style={styles.recipeInstructions}>{recipe.instructions}</Text>
+              </View>
+            );
+          })}
+        </ScrollView>
+      )}
+    </View>
+  );
+}
+
 export default function App() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
-        <NavigationContainer>
-          <StatusBar style="auto" />
-          <Drawer.Navigator
-            initialRouteName="Add Ingredient"
-            screenOptions={{
-              headerStyle: {
-                backgroundColor: '#4CAF50',
-              },
-              headerTintColor: '#fff',
-              headerTitleStyle: {
-                fontWeight: 'bold',
-              },
-              drawerStyle: {
-                backgroundColor: '#fff',
-                width: 240,
-              },
-              drawerActiveTintColor: '#4CAF50',
-              drawerInactiveTintColor: '#666',
-            }}
-          >
-            <Drawer.Screen 
-              name="Add Ingredient" 
-              component={AddIngredientScreen}
-              options={{
-                title: 'Add New Ingredient',
-                drawerIcon: ({ color, size }) => (
-                  <MaterialCommunityIcons name="plus-circle" size={size} color={color} />
-                ),
+        <IngredientsProvider>
+          <NavigationContainer>
+            <StatusBar style="auto" />
+            <Drawer.Navigator
+              initialRouteName="Add Ingredient"
+              screenOptions={{
+                headerStyle: {
+                  backgroundColor: '#4CAF50',
+                },
+                headerTintColor: '#fff',
+                headerTitleStyle: {
+                  fontWeight: 'bold',
+                },
+                drawerStyle: {
+                  backgroundColor: '#fff',
+                  width: 240,
+                },
+                drawerActiveTintColor: '#4CAF50',
+                drawerInactiveTintColor: '#666',
               }}
-            />
-            <Drawer.Screen 
-              name="View Pantry" 
-              component={ViewIngredientsScreen}
-              options={{
-                title: 'My Pantry',
-                drawerIcon: ({ color, size }) => (
-                  <MaterialCommunityIcons name="food-apple" size={size} color={color} />
-                ),
-              }}
-            />
-            <Drawer.Screen 
-              name="Recipes" 
-              component={RecipeScreen}
-              options={{
-                title: 'My Recipes',
-                drawerIcon: ({ color, size }) => (
-                  <MaterialCommunityIcons name="book-open-variant" size={size} color={color} />
-                ),
-              }}
-            />
-            <Drawer.Screen 
-              name="Online Recipes" 
-              component={OnlineRecipesScreen}
-              options={{
-                title: 'Find Recipes',
-                drawerIcon: ({ color, size }) => (
-                  <MaterialCommunityIcons name="web" size={size} color={color} />
-                ),
-              }}
-            />
-          </Drawer.Navigator>
-        </NavigationContainer>
+            >
+              <Drawer.Screen 
+                name="Add Ingredient" 
+                component={AddIngredientScreen}
+                options={{
+                  title: 'Add New Ingredient',
+                  drawerIcon: ({ color, size }) => (
+                    <MaterialCommunityIcons name="plus-circle" size={size} color={color} />
+                  ),
+                }}
+              />
+              <Drawer.Screen 
+                name="View Pantry" 
+                component={ViewIngredientsScreen}
+                options={{
+                  title: 'My Pantry',
+                  drawerIcon: ({ color, size }) => (
+                    <MaterialCommunityIcons name="food-apple" size={size} color={color} />
+                  ),
+                }}
+              />
+              <Drawer.Screen 
+                name="Shopping List" 
+                component={ShoppingListScreen}
+                options={{
+                  title: 'Shopping List',
+                  drawerIcon: ({ color, size }) => (
+                    <MaterialCommunityIcons name="cart" size={size} color={color} />
+                  ),
+                }}
+              />
+              <Drawer.Screen 
+                name="Recipes" 
+                component={RecipeScreen}
+                options={{
+                  title: 'My Recipes',
+                  drawerIcon: ({ color, size }) => (
+                    <MaterialCommunityIcons name="book-open-variant" size={size} color={color} />
+                  ),
+                }}
+              />
+              <Drawer.Screen 
+                name="Online Recipes" 
+                component={OnlineRecipesScreen}
+                options={{
+                  title: 'Find Recipes',
+                  drawerIcon: ({ color, size }) => (
+                    <MaterialCommunityIcons name="web" size={size} color={color} />
+                  ),
+                }}
+              />
+              <Drawer.Screen 
+                name="What's for Dinner?" 
+                component={WhatsForDinnerScreen}
+                options={{
+                  title: "What's for Dinner?",
+                  drawerIcon: ({ color, size }) => (
+                    <MaterialCommunityIcons name="food" size={size} color={color} />
+                  ),
+                }}
+              />
+            </Drawer.Navigator>
+          </NavigationContainer>
+        </IngredientsProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );
@@ -1100,11 +1840,6 @@ const styles = StyleSheet.create({
     color: '#666666',
     marginBottom: 8,
   },
-  ingredientCategory: {
-    fontSize: 15,
-    color: '#666666',
-    marginBottom: 8,
-  },
   expirationDate: {
     fontSize: 15,
     color: '#FF3B30',
@@ -1206,29 +1941,32 @@ const styles = StyleSheet.create({
     flex: 1,
     color: '#1a1a1a',
   },
-  canMakeTag: {
-    backgroundColor: '#34C759',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
+  recipeTags: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 8,
   },
-  canMakeText: {
-    color: '#fff',
-    fontWeight: '600',
-    fontSize: 13,
-    letterSpacing: 0.5,
+  recipeTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f0f0f0',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    gap: 4,
   },
-  cannotMakeTag: {
-    backgroundColor: '#FF9500',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
+  recipeTagText: {
+    fontSize: 12,
+    color: '#666',
   },
-  cannotMakeText: {
-    color: '#fff',
-    fontWeight: '600',
-    fontSize: 13,
-    letterSpacing: 0.5,
+  recipeInfo: {
+    marginTop: 8,
+  },
+  recipeCuisine: {
+    fontSize: 14,
+    color: '#666',
+    fontStyle: 'italic',
   },
   recipeSubtitle: {
     fontSize: 16,
@@ -1253,22 +1991,16 @@ const styles = StyleSheet.create({
   availableIngredient: {
     backgroundColor: '#E8F5E9',
     borderWidth: 1,
-    borderColor: '#34C759',
+    borderColor: '#4CAF50',
   },
   missingIngredient: {
-    backgroundColor: '#FFF3E0',
+    backgroundColor: '#FFEBEE',
     borderWidth: 1,
-    borderColor: '#FF9500',
+    borderColor: '#F44336',
   },
   ingredientTagText: {
     fontSize: 14,
     color: '#1a1a1a',
-    fontWeight: '500',
-  },
-  recipeInstructions: {
-    fontSize: 15,
-    color: '#666666',
-    lineHeight: 24,
   },
   searchContainer: {
     padding: 16,
@@ -1369,42 +2101,48 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     letterSpacing: 0.5,
   },
-  categoryContainer: {
-    marginBottom: 24,
-  },
-  categoryLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    marginBottom: 12,
-    color: '#1a1a1a',
-    textTransform: 'uppercase',
-    letterSpacing: 0.3,
-  },
-  categoryButtons: {
+  suggestRecipeButton: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  categoryButton: {
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    borderRadius: 20,
+    alignItems: 'center',
     backgroundColor: '#f0f0f0',
-    borderWidth: 1,
-    borderColor: '#e6e6e6',
+    padding: 12,
+    borderRadius: 8,
+    marginTop: 10,
+    marginBottom: 10,
   },
-  selectedCategoryButton: {
-    backgroundColor: '#007AFF',
-    borderColor: '#007AFF',
+  suggestRecipeButtonActive: {
+    backgroundColor: '#4CAF50',
+    shadowColor: '#4CAF50',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 4,
   },
-  categoryButtonText: {
-    fontSize: 14,
-    color: '#666666',
+  suggestRecipeButtonText: {
+    marginLeft: 8,
+    color: '#666',
+    fontSize: 16,
     fontWeight: '500',
   },
-  selectedCategoryButtonText: {
+  suggestRecipeButtonTextActive: {
     color: '#fff',
     fontWeight: '600',
+  },
+  recipeIndicator: {
+    position: 'absolute',
+    top: -5,
+    right: -5,
+    backgroundColor: '#FF5722',
+    borderRadius: 10,
+    width: 20,
+    height: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 2,
+    elevation: 2,
   },
   recipeSource: {
     fontSize: 14,
@@ -1446,5 +2184,292 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 12,
     marginTop: 16,
+  },
+  filterContainer: {
+    padding: 16,
+    backgroundColor: '#fff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e0e0e0',
+  },
+  filterScrollView: {
+    marginBottom: 16,
+  },
+  filterOptions: {
+    flexDirection: 'row',
+    paddingRight: 8,
+  },
+  filterOption: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: '#f5f5f5',
+    marginRight: 8,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+  },
+  selectedFilterOption: {
+    backgroundColor: '#3498db',
+    borderColor: '#3498db',
+  },
+  filterOptionText: {
+    color: '#666',
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  selectedFilterOptionText: {
+    color: '#fff',
+  },
+  timeInput: {
+    height: 40,
+    borderWidth: 1,
+    borderColor: '#e6e6e6',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    marginBottom: 16,
+    backgroundColor: '#fff',
+    color: '#1a1a1a',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  loadingText: {
+    marginTop: 16,
+    fontSize: 16,
+    color: '#666',
+  },
+  emptyContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  emptyText: {
+    fontSize: 18,
+    fontWeight: '500',
+    color: '#1a1a1a',
+    marginTop: 16,
+  },
+  emptySubtext: {
+    fontSize: 14,
+    color: '#666',
+    textAlign: 'center',
+    marginTop: 8,
+  },
+  title: {
+    fontSize: 28,
+    fontWeight: '700',
+    color: '#1a1a1a',
+    marginBottom: 4,
+  },
+  subtitle: {
+    fontSize: 16,
+    color: '#666',
+    marginBottom: 8,
+  },
+  recipesContainer: {
+    flex: 1,
+  },
+  recipeCard: {
+    backgroundColor: '#fff',
+    margin: 16,
+    borderRadius: 16,
+    padding: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  recipeMeta: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  recipeMetaItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  recipeMetaText: {
+    fontSize: 14,
+    color: '#666',
+    fontWeight: '500',
+  },
+  recipeDifficulty: {
+    fontSize: 14,
+    color: '#666',
+    fontWeight: '500',
+    marginBottom: 8,
+  },
+  recipeServings: {
+    fontSize: 14,
+    color: '#666',
+    fontWeight: '500',
+  },
+  recipeIngredientsTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    marginTop: 16,
+    marginBottom: 8,
+    color: '#1a1a1a',
+  },
+  pickerContainer: {
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e6e6e6',
+    marginBottom: 16,
+    overflow: 'hidden',
+  },
+  picker: {
+    height: 50,
+    width: '100%',
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e6e6e6',
+    marginBottom: 16,
+    paddingHorizontal: 12,
+  },
+  shoppingItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    padding: 16,
+    borderRadius: 12,
+    marginBottom: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  checkbox: {
+    marginRight: 12,
+  },
+  shoppingItemDetails: {
+    flex: 1,
+  },
+  shoppingItemName: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#1a1a1a',
+  },
+  checkedItem: {
+    textDecorationLine: 'line-through',
+    color: '#666',
+  },
+  shoppingItemQuantity: {
+    fontSize: 14,
+    color: '#666',
+    marginTop: 4,
+  },
+  recipeInstructions: {
+    fontSize: 15,
+    color: '#666666',
+    lineHeight: 24,
+  },
+  recipeInstructionsTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    marginTop: 16,
+    marginBottom: 8,
+    color: '#1a1a1a',
+  },
+  ingredientText: {
+    fontSize: 14,
+    color: '#1a1a1a',
+  },
+  shoppingItemCategory: {
+    fontSize: 12,
+    color: '#666',
+    marginTop: 2,
+  },
+  shoppingItemActions: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  moveToPantryButton: {
+    padding: 8,
+  },
+  missingIngredientsContainer: {
+    marginTop: 16,
+    padding: 16,
+    backgroundColor: '#FFF3E0',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#FFB74D',
+  },
+  missingIngredientsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
+  },
+  missingIngredientsTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#E65100',
+  },
+  missingIngredientsList: {
+    marginBottom: 16,
+  },
+  missingIngredientItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+  },
+  missingIngredientText: {
+    fontSize: 14,
+    color: '#E65100',
+  },
+  addToShoppingListButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FF9800',
+    padding: 12,
+    borderRadius: 8,
+    gap: 8,
+  },
+  addToShoppingListButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  headerContainer: {
+    padding: 20,
+    backgroundColor: '#fff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e0e0e0',
+  },
+  filterLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1a1a1a',
+    marginBottom: 8,
+  },
+  missingIngredientsTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#E65100',
+  },
+  missingIngredientsList: {
+    marginBottom: 16,
+  },
+  missingIngredientItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+  },
+  missingIngredientText: {
+    fontSize: 14,
+    color: '#E65100',
   },
 });
